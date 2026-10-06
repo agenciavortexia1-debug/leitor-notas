@@ -23,14 +23,15 @@
 
   #camera { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
 
+  /* Moldura no meio da tela, livre do aviso (em cima) e dos botões (embaixo) */
   #moldura {
-    position: fixed; left: 6%; right: 6%; top: 34%; height: 15%;
+    position: fixed; left: 6%; right: 6%; top: 50%; height: max(60px, 15vh); transform: translateY(-50%);
     border-radius: 10px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.38); border: 2px solid rgba(255, 255, 255, 0.85);
     pointer-events: none;
   }
   #moldura::after { content: ""; position: absolute; left: 4%; right: 4%; top: 50%; border-top: 2px solid var(--verde); opacity: 0.85; }
   #moldura.pausada::after { border-top-color: var(--suave); }
-  #dica { position: fixed; left: 0; right: 0; top: calc(49% + 12px); text-align: center; color: rgba(255,255,255,0.92); font-size: 15px; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.6); padding: 0 16px; }
+  #dica { position: fixed; left: 0; right: 0; top: calc(50% + max(30px, 7.5vh) + 10px); text-align: center; color: rgba(255,255,255,0.92); font-size: 15px; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.6); padding: 0 16px; }
 
   #topo {
     position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px;
@@ -43,25 +44,32 @@
   #pc.ok i { background: var(--verde); }
   #pc.fora i { background: var(--vermelho); }
 
-  #painel {
-    position: fixed; left: 0; right: 0; bottom: 0; background: var(--painel);
-    padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); border-top: 1px solid var(--linha);
-    backdrop-filter: blur(8px);
+  /* Aviso de cada leitura: aparece no topo e some sozinho */
+  #resultado {
+    position: fixed; left: 16px; right: 16px; top: calc(52px + env(safe-area-inset-top)); max-width: 560px; margin: 0 auto;
+    padding: 10px 14px; border-radius: 12px; background: var(--painel); border-left: 4px solid var(--linha);
+    opacity: 0; transform: translateY(-8px); transition: opacity 0.2s, transform 0.2s; pointer-events: none;
   }
-  #resultado { min-height: 92px; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.05); border-left: 4px solid var(--linha); }
+  #resultado.ver { opacity: 1; transform: none; }
   #resultado.ok { border-left-color: var(--verde); }
   #resultado.aviso { border-left-color: var(--ambar); }
   #resultado.erro { border-left-color: var(--vermelho); }
-  #situacao { font-size: 16px; font-weight: 500; }
+  #situacao { font-size: 15px; font-weight: 500; }
   #resultado.ok #situacao { color: var(--verde); }
   #resultado.aviso #situacao { color: var(--ambar); }
   #resultado.erro #situacao { color: var(--vermelho); }
-  #chave { font: 400 15px/1.5 ui-monospace, "Roboto Mono", Consolas, monospace; margin-top: 4px; overflow-wrap: break-word; }
+  #chave { font: 400 13px/1.45 ui-monospace, "Roboto Mono", Consolas, monospace; margin-top: 2px; overflow-wrap: break-word; color: rgba(255,255,255,0.85); }
   #detalhe { font-size: 13px; color: var(--suave); margin-top: 2px; }
-  #fila { font-size: 13px; color: var(--ambar); margin-top: 6px; display: none; }
+  #detalhe:empty, #chave:empty { display: none; }
 
-  #botoes { display: flex; gap: 8px; margin-top: 12px; }
-  #botoes button { flex: 1; background: rgba(255,255,255,0.08); border-radius: 10px; padding: 12px 4px; font-size: 14px; }
+  /* Só os botões embaixo */
+  #painel {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: linear-gradient(transparent, rgba(0,0,0,0.7));
+  }
+  #fila { display: none; width: fit-content; margin: 0 auto 8px; padding: 6px 12px; border-radius: 999px; font-size: 13px; color: #1b1405; background: var(--ambar); }
+  #botoes { display: flex; gap: 8px; max-width: 560px; margin: 0 auto; }
+  #botoes button { flex: 1; background: rgba(16, 19, 18, 0.85); border-radius: 10px; padding: 11px 4px; font-size: 14px; }
   #botoes button[hidden] { display: none; }
   #botoes button.ligado { background: rgba(0, 212, 126, 0.2); color: var(--verde); }
 
@@ -99,13 +107,14 @@
   <div id="pc"><i></i><span>Conectando ao PC</span></div>
 </div>
 
+<div id="resultado">
+  <div id="situacao"></div>
+  <div id="chave"></div>
+  <div id="detalhe"></div>
+</div>
+
 <div id="painel">
-  <div id="resultado">
-    <div id="situacao">Pronto para ler</div>
-    <div id="chave"></div>
-    <div id="detalhe">Passe uma nota depois da outra. Não precisa apertar nada.</div>
-    <div id="fila"></div>
-  </div>
+  <div id="fila"></div>
   <div id="botoes">
     <button id="btPausar">Pausar</button>
     <button id="btLuz" hidden>Lanterna</button>
@@ -169,37 +178,54 @@ function normalizar(valor, formato) {
 const emGrupos = (c) => /^\d{44}$/.test(c) ? c.replace(/(\d{4})(?=\d)/g, '$1 ') : c;
 
 // ---------- Som e vibração ----------
+// "leitura": bipe de leitor de loja, na hora em que a câmera pega o código.
+// "ok": só a piscada verde (o bipe já tocou). "aviso" e "erro": tom grave.
 let audio = null;
-function bip(tipo) {
+function tocar(notas, volume) {
   try {
     if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
-    const notas = tipo === 'ok' ? [[1800, 0.09]] : tipo === 'aviso' ? [[520, 0.12], [520, 0.12]] : [[240, 0.35]];
-    let t = audio.currentTime;
+    if (audio.state === 'suspended') audio.resume();
+    let t = audio.currentTime + 0.01;
     for (const [freq, dur] of notas) {
       const osc = audio.createOscillator();
       const vol = audio.createGain();
       osc.frequency.value = freq;
       osc.type = 'square';
-      vol.gain.setValueAtTime(0.12, t);
-      vol.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      vol.gain.setValueAtTime(volume, t);
+      vol.gain.setValueAtTime(volume, t + dur - 0.015);
+      vol.gain.linearRampToValueAtTime(0.0001, t + dur);
       osc.connect(vol).connect(audio.destination);
       osc.start(t);
       osc.stop(t + dur);
-      t += dur + 0.06;
+      t += dur + 0.07;
     }
   } catch { /* sem som */ }
-  if (navigator.vibrate) navigator.vibrate(tipo === 'ok' ? 70 : tipo === 'aviso' ? [90, 70, 90] : 400);
+}
+function bip(tipo) {
+  if (tipo === 'leitura') {
+    tocar([[2700, 0.13]], 0.35);
+    if (navigator.vibrate) navigator.vibrate(60);
+    return;
+  }
+  if (tipo === 'aviso') tocar([[520, 0.13], [520, 0.13]], 0.3);
+  if (tipo === 'erro') tocar([[240, 0.35]], 0.3);
+  if (navigator.vibrate && tipo !== 'ok') navigator.vibrate(tipo === 'aviso' ? [90, 70, 90] : 400);
   const p = $('piscada');
   p.className = '';
   void p.offsetWidth;
   p.className = tipo;
 }
 
-function mostrar(tipo, situacao, chave, detalhe) {
-  $('resultado').className = tipo;
+// Aviso no topo que some sozinho (não fica na frente da próxima nota)
+let tempoAviso = null;
+function mostrar(tipo, situacao, chave, detalhe, ms = 2000) {
+  const caixa = $('resultado');
+  caixa.className = `${tipo} ver`;
   $('situacao').textContent = situacao;
   $('chave').textContent = chave ? emGrupos(chave) : '';
   $('detalhe').textContent = detalhe || '';
+  clearTimeout(tempoAviso);
+  tempoAviso = setTimeout(() => caixa.classList.remove('ver'), ms);
 }
 function mostrarTotal(total) {
   $('contador').innerHTML = `${total} <small>${total === 1 ? 'nota lida' : 'notas lidas'}</small>`;
@@ -216,8 +242,8 @@ function guardarFila() {
   try { localStorage.setItem(CHAVE_FILA, JSON.stringify(fila)); } catch { /* segue só na memória */ }
   $('fila').style.display = fila.length && !conectado() ? 'block' : 'none';
   $('fila').textContent = fila.length === 1
-    ? '1 nota guardada no celular, vai para o PC assim que conectar.'
-    : `${fila.length} notas guardadas no celular, vão para o PC assim que conectar.`;
+    ? '1 nota guardada, vai para o PC quando conectar'
+    : `${fila.length} notas guardadas, vão para o PC quando conectar`;
 }
 
 // ---------- Conexão direta com o PC ----------
@@ -300,13 +326,13 @@ function tratarResposta(d) {
   guardarFila();
   if (d.situacao === 'nova') {
     bip('ok');
-    mostrar('ok', `Nota ${d.numero} na lista do PC`, d.codigo, 'Pode passar a próxima.');
+    mostrar('ok', `Nota ${d.numero} na lista do PC`, d.codigo, '', 1800);
   } else if (d.situacao === 'repetida') {
     bip('aviso');
-    mostrar('aviso', `Essa nota já foi lida (é a nota ${d.numero})`, d.codigo, `Lida às ${d.hora}. Não entrou de novo.`);
+    mostrar('aviso', `Essa já foi lida (é a nota ${d.numero}, às ${d.hora})`, d.codigo, 'Não entrou de novo.', 3000);
   } else {
     bip('erro');
-    mostrar('erro', 'O PC não aceitou essa leitura', '', 'Passe a nota de novo.');
+    mostrar('erro', 'O PC não aceitou essa leitura', '', 'Passe a nota de novo.', 3000);
   }
 }
 
@@ -340,8 +366,8 @@ function aoDetectar(valor, formato) {
   if (agora - ultimo.aceitoEm < 600) return;
   ultimo = { codigo: r.codigo, aceitoEm: agora, vistoEm: agora };
   candidato = { codigo: null, em: 0 };
-  if (navigator.vibrate) navigator.vibrate(25);
-  mostrar('', 'Lida, mandando para o PC...', r.codigo, '');
+  bip('leitura');
+  mostrar('', 'Lida, mandando para o PC...', r.codigo, '', 4000);
   mandar(r.codigo, formato);
 }
 
@@ -372,42 +398,84 @@ async function prepararDetector() {
       }
     } catch { /* cai para o leitor reserva */ }
   }
-  // Reserva: ZXing, para navegador sem leitor de código de barras embutido
+  // Reserva: ZXing, para navegador sem leitor de código de barras embutido.
+  // Roda num trabalhador à parte, então a imagem da câmera nunca congela.
+  const enderecoZxing = new URL('zxing.min.js', location.href).href;
+  const codigo = `
+    try { importScripts(${JSON.stringify(enderecoZxing)}); } catch (e) { postMessage({ falhou: true }); throw e; }
+    const F = ZXing.BarcodeFormat;
+    const dicas = new Map();
+    dicas.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [F.CODE_128, F.ITF, F.EAN_13, F.EAN_8, F.CODE_39, F.QR_CODE]);
+    dicas.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const leitor = new ZXing.MultiFormatReader();
+    leitor.setHints(dicas);
+    const nomes = {};
+    nomes[F.CODE_128] = 'code_128'; nomes[F.ITF] = 'itf'; nomes[F.EAN_13] = 'ean_13';
+    nomes[F.EAN_8] = 'ean_8'; nomes[F.CODE_39] = 'code_39'; nomes[F.QR_CODE] = 'qr_code';
+    let tela = null, ctx = null, vez = 0;
+    onmessage = (e) => {
+      const quadro = e.data;
+      if (!tela) { tela = new OffscreenCanvas(quadro.width, quadro.height); ctx = tela.getContext('2d', { willReadFrequently: true }); }
+      if (tela.width !== quadro.width || tela.height !== quadro.height) { tela.width = quadro.width; tela.height = quadro.height; }
+      ctx.drawImage(quadro, 0, 0);
+      quadro.close();
+      const px = ctx.getImageData(0, 0, tela.width, tela.height).data;
+      const total = tela.width * tela.height;
+      const cinza = new Uint8ClampedArray(total);
+      for (let i = 0, j = 0; i < total; i++, j += 4) cinza[i] = (px[j] * 77 + px[j + 1] * 150 + px[j + 2] * 29) >> 8;
+      const fonte = new ZXing.RGBLuminanceSource(cinza, tela.width, tela.height);
+      vez += 1;
+      const binario = vez % 2 ? new ZXing.HybridBinarizer(fonte) : new ZXing.GlobalHistogramBinarizer(fonte);
+      let achou = null;
+      try {
+        const r = leitor.decodeWithState(new ZXing.BinaryBitmap(binario));
+        achou = { texto: r.getText(), formato: nomes[r.getBarcodeFormat()] || 'outro' };
+      } catch (_) { /* nada nesse quadro */ } finally { leitor.reset(); }
+      postMessage({ achou });
+    };
+    postMessage({ pronto: true });
+  `;
+  const trabalhador = new Worker(URL.createObjectURL(new Blob([codigo], { type: 'text/javascript' })));
   await new Promise((ok, falhou) => {
-    const s = document.createElement('script');
-    s.src = 'zxing.min.js';
-    s.onload = ok;
-    s.onerror = falhou;
-    document.head.appendChild(s);
+    const desistir = setTimeout(() => falhou(new Error('leitor reserva não carregou')), 15000);
+    trabalhador.onmessage = (e) => {
+      clearTimeout(desistir);
+      if (e.data && e.data.pronto) ok(); else falhou(new Error('leitor reserva não carregou'));
+    };
+    trabalhador.onerror = () => { clearTimeout(desistir); falhou(new Error('leitor reserva não carregou')); };
   });
-  const F = ZXing.BarcodeFormat;
-  const dicas = new Map();
-  dicas.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [F.CODE_128, F.ITF, F.EAN_13, F.EAN_8, F.CODE_39, F.QR_CODE]);
-  dicas.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  const leitor = new ZXing.MultiFormatReader();
-  leitor.setHints(dicas);
-  const nomes = { [F.CODE_128]: 'code_128', [F.ITF]: 'itf', [F.EAN_13]: 'ean_13', [F.EAN_8]: 'ean_8', [F.CODE_39]: 'code_39', [F.QR_CODE]: 'qr_code' };
-  const tela = document.createElement('canvas');
-  const ctx = tela.getContext('2d', { willReadFrequently: true });
-  let vez = 0;
-  zx = () => {
-    const w = video.videoWidth, h = video.videoHeight;
-    if (!w || !h) return;
-    // Só a faixa do meio da imagem, onde fica a moldura
-    const alt = Math.round(h * 0.45);
-    const y = Math.round((h - alt) / 2);
-    const escala = Math.min(1, 1600 / w);
-    tela.width = Math.round(w * escala);
-    tela.height = Math.round(alt * escala);
-    ctx.drawImage(video, 0, y, w, alt, 0, 0, tela.width, tela.height);
-    const fonte = new ZXing.HTMLCanvasElementLuminanceSource(tela);
-    vez += 1;
-    const binario = vez % 2 ? new ZXing.HybridBinarizer(fonte) : new ZXing.GlobalHistogramBinarizer(fonte);
+  let resposta = null;
+  trabalhador.onmessage = (e) => { const r = resposta; resposta = null; if (r) r(e.data && e.data.achou); };
+  trabalhador.onerror = () => { const r = resposta; resposta = null; if (r) r(null); };
+  zx = (quadro) => new Promise((ok) => {
+    resposta = ok;
+    setTimeout(() => { if (resposta === ok) { resposta = null; ok(null); } }, 2000);
+    trabalhador.postMessage(quadro, [quadro]);
+  });
+}
+
+// Só a faixa do meio da imagem (onde fica a moldura), no máximo 1600 px de largura
+function faixaDaMoldura() {
+  const w = video.videoWidth, h = video.videoHeight;
+  if (!w || !h) return null;
+  const alt = Math.round(h * 0.5);
+  const escala = Math.min(1, 1600 / w);
+  return { y: Math.round((h - alt) / 2), w, alt, largura: Math.round(w * escala), altura: Math.round(alt * escala) };
+}
+
+async function lerQuadro() {
+  const f = faixaDaMoldura();
+  if (!f) return;
+  const quadro = await createImageBitmap(video, 0, f.y, f.w, f.alt, { resizeWidth: f.largura, resizeHeight: f.altura, resizeQuality: 'high' });
+  if (detector) {
     try {
-      const r = leitor.decodeWithState(new ZXing.BinaryBitmap(binario));
-      aoDetectar(r.getText(), nomes[r.getBarcodeFormat()] || 'outro');
-    } catch { /* nada nesse quadro */ } finally { leitor.reset(); }
-  };
+      const achados = await detector.detect(quadro);
+      for (const a of achados) aoDetectar(a.rawValue, a.format);
+    } finally { quadro.close(); }
+  } else {
+    const achou = await zx(quadro);
+    if (achou) aoDetectar(achou.texto, achou.formato);
+  }
 }
 
 async function ligarCamera() {
@@ -433,17 +501,12 @@ async function lerSempre() {
   if (lendo) return;
   lendo = true;
   while (lendo) {
+    const inicio = performance.now();
     if (!pausado && fluxo && video.readyState >= 2) {
-      try {
-        if (detector) {
-          const achados = await detector.detect(video);
-          for (const a of achados) aoDetectar(a.rawValue, a.format);
-        } else if (zx) {
-          zx();
-        }
-      } catch { /* quadro ruim */ }
+      try { await lerQuadro(); } catch { /* quadro ruim */ }
     }
-    await new Promise((ok) => setTimeout(ok, detector ? 30 : 15));
+    // Uns 10 quadros por segundo: rápido para pegar a nota e leve para a câmera não engasgar
+    await new Promise((ok) => setTimeout(ok, Math.max(15, 100 - (performance.now() - inicio))));
   }
 }
 
@@ -463,6 +526,8 @@ $('btComecar').onclick = async () => {
     return;
   }
   $('telaInicio').hidden = true;
+  if (audio && audio.state === 'suspended') audio.resume(); // som liberado já no toque
+  mostrar('', 'Pronto para ler', '', 'Passe uma nota depois da outra.', 2500);
   travarTelaAcesa();
   lerSempre();
 };
