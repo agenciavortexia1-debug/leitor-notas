@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d0c">
+<title>Leitor de Notas</title>
+<style>
+  :root {
+    --fundo: #0b0d0c;
+    --painel: rgba(16, 19, 18, 0.92);
+    --texto: #f2f5f3;
+    --suave: #9aa59f;
+    --verde: #00d47e;
+    --ambar: #f5a524;
+    --vermelho: #ff5a5f;
+    --linha: rgba(255, 255, 255, 0.12);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; background: var(--fundo); color: var(--texto); overflow: hidden; }
+  body { font: 400 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button { font: inherit; font-weight: 500; color: inherit; border: 0; cursor: pointer; }
+
+  #camera { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+
+  #moldura {
+    position: fixed; left: 6%; right: 6%; top: 34%; height: 15%;
+    border-radius: 10px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.38); border: 2px solid rgba(255, 255, 255, 0.85);
+    pointer-events: none;
+  }
+  #moldura::after { content: ""; position: absolute; left: 4%; right: 4%; top: 50%; border-top: 2px solid var(--verde); opacity: 0.85; }
+  #moldura.pausada::after { border-top-color: var(--suave); }
+  #dica { position: fixed; left: 0; right: 0; top: calc(49% + 12px); text-align: center; color: rgba(255,255,255,0.92); font-size: 15px; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.6); padding: 0 16px; }
+
+  #topo {
+    position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    padding: calc(12px + env(safe-area-inset-top)) 16px 12px; background: linear-gradient(rgba(0,0,0,0.65), transparent);
+  }
+  #contador { font-size: 20px; font-weight: 500; white-space: nowrap; }
+  #contador small { font-size: 14px; font-weight: 400; color: var(--suave); }
+  #pc { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--suave); text-align: right; }
+  #pc i { width: 9px; height: 9px; border-radius: 50%; background: var(--suave); flex: none; }
+  #pc.ok i { background: var(--verde); }
+  #pc.fora i { background: var(--vermelho); }
+
+  #painel {
+    position: fixed; left: 0; right: 0; bottom: 0; background: var(--painel);
+    padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); border-top: 1px solid var(--linha);
+    backdrop-filter: blur(8px);
+  }
+  #resultado { min-height: 92px; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.05); border-left: 4px solid var(--linha); }
+  #resultado.ok { border-left-color: var(--verde); }
+  #resultado.aviso { border-left-color: var(--ambar); }
+  #resultado.erro { border-left-color: var(--vermelho); }
+  #situacao { font-size: 16px; font-weight: 500; }
+  #resultado.ok #situacao { color: var(--verde); }
+  #resultado.aviso #situacao { color: var(--ambar); }
+  #resultado.erro #situacao { color: var(--vermelho); }
+  #chave { font: 400 15px/1.5 ui-monospace, "Roboto Mono", Consolas, monospace; margin-top: 4px; overflow-wrap: break-word; }
+  #detalhe { font-size: 13px; color: var(--suave); margin-top: 2px; }
+  #fila { font-size: 13px; color: var(--ambar); margin-top: 6px; display: none; }
+
+  #botoes { display: flex; gap: 8px; margin-top: 12px; }
+  #botoes button { flex: 1; background: rgba(255,255,255,0.08); border-radius: 10px; padding: 12px 4px; font-size: 14px; }
+  #botoes button[hidden] { display: none; }
+  #botoes button.ligado { background: rgba(0, 212, 126, 0.2); color: var(--verde); }
+
+  #piscada { position: fixed; inset: 0; pointer-events: none; opacity: 0; box-shadow: inset 0 0 0 10px var(--verde); }
+  #piscada.ok { animation: piscar 0.45s ease-out; }
+  #piscada.aviso { --verde: var(--ambar); animation: piscar 0.7s ease-out; }
+  #piscada.erro { --verde: var(--vermelho); animation: piscar 0.7s ease-out; }
+  @keyframes piscar { from { opacity: 1; } to { opacity: 0; } }
+
+  .cobre {
+    position: fixed; inset: 0; background: var(--fundo); display: flex; flex-direction: column; justify-content: center;
+    padding: 24px 20px; gap: 16px;
+  }
+  .cobre[hidden] { display: none; }
+  .cobre h1 { font-size: 26px; font-weight: 500; }
+  .cobre p { color: var(--suave); font-size: 16px; }
+  .grande { background: var(--verde); color: #04140c; border-radius: 12px; padding: 16px; font-size: 18px; }
+  .simples { background: rgba(255,255,255,0.08); border-radius: 12px; padding: 14px; }
+  #campoManual {
+    width: 100%; padding: 14px; font: 400 18px ui-monospace, Consolas, monospace; color: var(--texto);
+    background: rgba(255,255,255,0.06); border: 1px solid var(--linha); border-radius: 12px; outline: none;
+  }
+  #campoManual:focus { border-color: var(--verde); }
+  #avisoManual { color: var(--vermelho); font-size: 14px; min-height: 20px; }
+</style>
+</head>
+<body>
+<video id="camera" playsinline muted autoplay></video>
+<div id="moldura"></div>
+<div id="dica">Encaixe o código de barras aqui</div>
+<div id="piscada"></div>
+
+<div id="topo">
+  <div id="contador">0 <small>notas lidas</small></div>
+  <div id="pc"><i></i><span>Conectando ao PC</span></div>
+</div>
+
+<div id="painel">
+  <div id="resultado">
+    <div id="situacao">Pronto para ler</div>
+    <div id="chave"></div>
+    <div id="detalhe">Passe uma nota depois da outra. Não precisa apertar nada.</div>
+    <div id="fila"></div>
+  </div>
+  <div id="botoes">
+    <button id="btPausar">Pausar</button>
+    <button id="btLuz" hidden>Lanterna</button>
+    <button id="btZoom" hidden>Zoom 1x</button>
+    <button id="btManual">Digitar</button>
+  </div>
+</div>
+
+<div class="cobre" id="telaInicio">
+  <h1>Leitor de Notas</h1>
+  <p>Aponte a câmera para o código de barras de cada nota, uma depois da outra. Cada chave lida vai direto para a lista no PC.</p>
+  <button class="grande" id="btComecar">Começar a ler</button>
+  <p id="erroCamera" style="color: var(--vermelho)"></p>
+</div>
+
+<div class="cobre" id="telaSemPC" hidden>
+  <h1>Leitor de Notas</h1>
+  <p>Este link não veio do PC. Abra o arquivo Leitor de Notas no computador e leia o QR que aparece lá.</p>
+</div>
+
+<div class="cobre" id="telaManual" hidden>
+  <h1>Digitar a chave</h1>
+  <p>Para a nota que a câmera não conseguir ler. São os 44 números que aparecem embaixo de "Chave de Acesso".</p>
+  <input id="campoManual" inputmode="numeric" autocomplete="off" placeholder="0000 0000 0000 ...">
+  <div id="avisoManual"></div>
+  <button class="grande" id="btMandar">Mandar para o PC</button>
+  <button class="simples" id="btFecharManual">Voltar para a câmera</button>
+</div>
+
+<script src="peerjs.min.js"></script>
+<script>
+const PC = decodeURIComponent(location.hash.slice(1));
+const FORMATOS = ['code_128', 'itf', 'ean_13', 'ean_8', 'code_39', 'qr_code'];
+const CHAVE_FILA = `leitorNotas.fila.${PC}`;
+const $ = (id) => document.getElementById(id);
+
+// ---------- Mesma conferência do PC ----------
+function chaveValida(c) {
+  if (!/^\d{44}$/.test(c)) return false;
+  let soma = 0, peso = 2;
+  for (let i = 42; i >= 0; i--) { soma += Number(c[i]) * peso; peso = peso === 9 ? 2 : peso + 1; }
+  const resto = soma % 11;
+  return (resto < 2 ? 0 : 11 - resto) === Number(c[43]);
+}
+// { codigo, conferida } ou null. "conferida" = a própria chave prova que a leitura está certa.
+function normalizar(valor, formato) {
+  const bruto = String(valor || '').trim();
+  if (!bruto) return null;
+  if (formato === 'qr_code') {
+    const achou = bruto.match(/\d{44}/);
+    if (achou && chaveValida(achou[0])) return { codigo: achou[0], conferida: true };
+  }
+  const semEspaco = bruto.replace(/\s+/g, '');
+  if (/^\d{44}$/.test(semEspaco)) {
+    if (formato === 'itf') return { codigo: semEspaco, conferida: false };
+    return chaveValida(semEspaco) ? { codigo: semEspaco, conferida: true } : null;
+  }
+  if (/^[0-9A-Za-z.\-/ ]{1,80}$/.test(bruto)) return { codigo: bruto, conferida: false };
+  return null;
+}
+const emGrupos = (c) => /^\d{44}$/.test(c) ? c.replace(/(\d{4})(?=\d)/g, '$1 ') : c;
+
+// ---------- Som e vibração ----------
+let audio = null;
+function bip(tipo) {
+  try {
+    if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+    const notas = tipo === 'ok' ? [[1800, 0.09]] : tipo === 'aviso' ? [[520, 0.12], [520, 0.12]] : [[240, 0.35]];
+    let t = audio.currentTime;
+    for (const [freq, dur] of notas) {
+      const osc = audio.createOscillator();
+      const vol = audio.createGain();
+      osc.frequency.value = freq;
+      osc.type = 'square';
+      vol.gain.setValueAtTime(0.12, t);
+      vol.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(vol).connect(audio.destination);
+      osc.start(t);
+      osc.stop(t + dur);
+      t += dur + 0.06;
+    }
+  } catch { /* sem som */ }
+  if (navigator.vibrate) navigator.vibrate(tipo === 'ok' ? 70 : tipo === 'aviso' ? [90, 70, 90] : 400);
+  const p = $('piscada');
+  p.className = '';
+  void p.offsetWidth;
+  p.className = tipo;
+}
+
+function mostrar(tipo, situacao, chave, detalhe) {
+  $('resultado').className = tipo;
+  $('situacao').textContent = situacao;
+  $('chave').textContent = chave ? emGrupos(chave) : '';
+  $('detalhe').textContent = detalhe || '';
+}
+function mostrarTotal(total) {
+  $('contador').innerHTML = `${total} <small>${total === 1 ? 'nota lida' : 'notas lidas'}</small>`;
+}
+function estadoPC(tipo, texto) {
+  $('pc').className = tipo;
+  $('pc').querySelector('span').textContent = texto;
+}
+
+// ---------- Fila: o que foi lido fica guardado até o PC confirmar ----------
+let fila = [];
+try { fila = JSON.parse(localStorage.getItem(CHAVE_FILA) || '[]'); } catch { fila = []; }
+function guardarFila() {
+  try { localStorage.setItem(CHAVE_FILA, JSON.stringify(fila)); } catch { /* segue só na memória */ }
+  $('fila').style.display = fila.length && !conectado() ? 'block' : 'none';
+  $('fila').textContent = fila.length === 1
+    ? '1 nota guardada no celular, vai para o PC assim que conectar.'
+    : `${fila.length} notas guardadas no celular, vão para o PC assim que conectar.`;
+}
+
+// ---------- Conexão direta com o PC ----------
+let peer = null;
+let conn = null;
+let tentativa = null;
+const conectado = () => !!(conn && conn.open);
+
+function agendar(ms = 3000) {
+  clearTimeout(tentativa);
+  tentativa = setTimeout(conectarPC, ms);
+}
+
+function ligarPeer() {
+  peer = new Peer({ debug: 0 });
+  peer.on('open', conectarPC);
+  peer.on('disconnected', () => { if (!peer.destroyed) agendar(1500); });
+  peer.on('error', (erro) => {
+    if (erro.type === 'peer-unavailable') estadoPC('fora', 'O PC não está com a ferramenta aberta');
+    else if (!conectado()) estadoPC('fora', 'Sem internet, tentando de novo');
+    if (peer.destroyed) { peer = null; agendar(3000); } else agendar(3000);
+  });
+}
+
+function conectarPC() {
+  clearTimeout(tentativa);
+  if (conectado()) return;
+  if (!peer || peer.destroyed) return ligarPeer();
+  if (peer.disconnected) { peer.reconnect(); return; }
+  if (!peer.open) return;
+  const c = peer.connect(PC, { reliable: true, serialization: 'json' });
+  conn = c;
+  c.on('open', () => {
+    if (conn !== c) return;
+    ultimoSinal = performance.now();
+    estadoPC('ok', 'PC conectado');
+    c.send({ t: 'oi' });
+    for (const item of fila) c.send({ t: 'chave', ...item });
+    guardarFila();
+  });
+  c.on('data', tratarResposta);
+  const caiu = () => {
+    if (conn !== c) return;
+    conn = null;
+    estadoPC('fora', 'PC desconectado, reconectando');
+    guardarFila();
+    agendar(2000);
+  };
+  c.on('close', caiu);
+  c.on('error', caiu);
+  // Não abriu em 10 s: tenta de novo
+  setTimeout(() => { if (conn === c && !c.open) { try { c.close(); } catch { /* já fechada */ } caiu(); } }, 10000);
+}
+
+// Sinal de vida: o celular manda "oi" a cada 3 s e o PC responde.
+// Sem resposta por 10 s, a ligação morreu (PC fechado, internet caiu): reconecta.
+let ultimoSinal = 0;
+setInterval(() => {
+  if (!conectado()) return;
+  if (performance.now() - ultimoSinal > 10000) {
+    const morta = conn;
+    conn = null;
+    try { morta.close(); } catch { /* já fechada */ }
+    estadoPC('fora', 'PC desconectado, reconectando');
+    guardarFila();
+    agendar(500);
+    return;
+  }
+  try { conn.send({ t: 'oi' }); } catch { /* o próximo sinal resolve */ }
+}, 3000);
+
+function tratarResposta(d) {
+  if (!d || typeof d !== 'object') return;
+  ultimoSinal = performance.now();
+  if (typeof d.total === 'number') mostrarTotal(d.total);
+  if (d.t !== 'r') return;
+  const antes = fila.length;
+  fila = fila.filter((item) => item.id !== d.id);
+  if (fila.length === antes) return; // resposta repetida de algo já confirmado
+  guardarFila();
+  if (d.situacao === 'nova') {
+    bip('ok');
+    mostrar('ok', `Nota ${d.numero} na lista do PC`, d.codigo, 'Pode passar a próxima.');
+  } else if (d.situacao === 'repetida') {
+    bip('aviso');
+    mostrar('aviso', `Essa nota já foi lida (é a nota ${d.numero})`, d.codigo, `Lida às ${d.hora}. Não entrou de novo.`);
+  } else {
+    bip('erro');
+    mostrar('erro', 'O PC não aceitou essa leitura', '', 'Passe a nota de novo.');
+  }
+}
+
+function mandar(codigo, formato) {
+  const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`, codigo, formato };
+  fila.push(item);
+  guardarFila();
+  if (conectado()) conn.send({ t: 'chave', ...item });
+  else mostrar('aviso', 'Lida e guardada no celular', codigo, 'Vai para o PC assim que conectar.');
+}
+
+// ---------- Quando uma leitura vale ----------
+let ultimo = { codigo: null, aceitoEm: 0, vistoEm: 0 };
+let candidato = { codigo: null, em: 0 };
+
+function aoDetectar(valor, formato) {
+  const r = normalizar(valor, formato);
+  if (!r) return;
+  const agora = performance.now();
+  // A mesma nota parada na frente da câmera não conta de novo.
+  // Só volta a contar depois de 3 s fora da câmera (e aí o PC avisa que é repetida).
+  if (r.codigo === ultimo.codigo && agora - ultimo.vistoEm < 3000) {
+    ultimo.vistoEm = agora;
+    return;
+  }
+  // Código sem conferência própria: precisa sair igual duas vezes seguidas
+  if (!r.conferida && (candidato.codigo !== r.codigo || agora - candidato.em > 1500)) {
+    candidato = { codigo: r.codigo, em: agora };
+    return;
+  }
+  if (agora - ultimo.aceitoEm < 600) return;
+  ultimo = { codigo: r.codigo, aceitoEm: agora, vistoEm: agora };
+  candidato = { codigo: null, em: 0 };
+  if (navigator.vibrate) navigator.vibrate(25);
+  mostrar('', 'Lida, mandando para o PC...', r.codigo, '');
+  mandar(r.codigo, formato);
+}
+
+// ---------- Câmera ----------
+const video = $('camera');
+let fluxo = null;
+let pista = null;
+let lendo = false;
+let pausado = false;
+let detector = null;
+let zx = null;
+let luz = false;
+let zooms = [];
+let zoomAtual = 0;
+
+async function travarTelaAcesa() {
+  try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch { /* sem trava */ }
+}
+
+async function prepararDetector() {
+  if (detector || zx) return;
+  if ('BarcodeDetector' in window) {
+    try {
+      const aceitos = await BarcodeDetector.getSupportedFormats();
+      if (aceitos.includes('code_128')) {
+        detector = new BarcodeDetector({ formats: FORMATOS.filter((f) => aceitos.includes(f)) });
+        return;
+      }
+    } catch { /* cai para o leitor reserva */ }
+  }
+  // Reserva: ZXing, para navegador sem leitor de código de barras embutido
+  await new Promise((ok, falhou) => {
+    const s = document.createElement('script');
+    s.src = 'zxing.min.js';
+    s.onload = ok;
+    s.onerror = falhou;
+    document.head.appendChild(s);
+  });
+  const F = ZXing.BarcodeFormat;
+  const dicas = new Map();
+  dicas.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [F.CODE_128, F.ITF, F.EAN_13, F.EAN_8, F.CODE_39, F.QR_CODE]);
+  dicas.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  const leitor = new ZXing.MultiFormatReader();
+  leitor.setHints(dicas);
+  const nomes = { [F.CODE_128]: 'code_128', [F.ITF]: 'itf', [F.EAN_13]: 'ean_13', [F.EAN_8]: 'ean_8', [F.CODE_39]: 'code_39', [F.QR_CODE]: 'qr_code' };
+  const tela = document.createElement('canvas');
+  const ctx = tela.getContext('2d', { willReadFrequently: true });
+  let vez = 0;
+  zx = () => {
+    const w = video.videoWidth, h = video.videoHeight;
+    if (!w || !h) return;
+    // Só a faixa do meio da imagem, onde fica a moldura
+    const alt = Math.round(h * 0.45);
+    const y = Math.round((h - alt) / 2);
+    const escala = Math.min(1, 1600 / w);
+    tela.width = Math.round(w * escala);
+    tela.height = Math.round(alt * escala);
+    ctx.drawImage(video, 0, y, w, alt, 0, 0, tela.width, tela.height);
+    const fonte = new ZXing.HTMLCanvasElementLuminanceSource(tela);
+    vez += 1;
+    const binario = vez % 2 ? new ZXing.HybridBinarizer(fonte) : new ZXing.GlobalHistogramBinarizer(fonte);
+    try {
+      const r = leitor.decodeWithState(new ZXing.BinaryBitmap(binario));
+      aoDetectar(r.getText(), nomes[r.getBarcodeFormat()] || 'outro');
+    } catch { /* nada nesse quadro */ } finally { leitor.reset(); }
+  };
+}
+
+async function ligarCamera() {
+  fluxo = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+  });
+  video.srcObject = fluxo;
+  await video.play();
+  pista = fluxo.getVideoTracks()[0];
+  const cap = pista.getCapabilities ? pista.getCapabilities() : {};
+  try {
+    if (cap.focusMode && cap.focusMode.includes('continuous')) await pista.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+  } catch { /* sem foco automático */ }
+  $('btLuz').hidden = !cap.torch;
+  if (cap.zoom && cap.zoom.max > 1) {
+    zooms = [1, 1.5, 2, 3].filter((z) => z >= cap.zoom.min && z <= cap.zoom.max);
+    $('btZoom').hidden = zooms.length < 2;
+  }
+}
+
+async function lerSempre() {
+  if (lendo) return;
+  lendo = true;
+  while (lendo) {
+    if (!pausado && fluxo && video.readyState >= 2) {
+      try {
+        if (detector) {
+          const achados = await detector.detect(video);
+          for (const a of achados) aoDetectar(a.rawValue, a.format);
+        } else if (zx) {
+          zx();
+        }
+      } catch { /* quadro ruim */ }
+    }
+    await new Promise((ok) => setTimeout(ok, detector ? 30 : 15));
+  }
+}
+
+$('btComecar').onclick = async () => {
+  $('erroCamera').textContent = '';
+  try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch { /* sem som */ }
+  try {
+    await ligarCamera();
+  } catch {
+    $('erroCamera').textContent = 'Não consegui abrir a câmera. Libere a câmera para este site nas permissões do navegador e toque de novo.';
+    return;
+  }
+  try {
+    await prepararDetector();
+  } catch {
+    $('erroCamera').textContent = 'Não consegui carregar o leitor. Confira a internet do celular e toque de novo.';
+    return;
+  }
+  $('telaInicio').hidden = true;
+  travarTelaAcesa();
+  lerSempre();
+};
+
+$('btPausar').onclick = () => {
+  pausado = !pausado;
+  $('btPausar').textContent = pausado ? 'Continuar' : 'Pausar';
+  $('btPausar').classList.toggle('ligado', pausado);
+  $('moldura').classList.toggle('pausada', pausado);
+  $('dica').textContent = pausado ? 'Leitura pausada' : 'Encaixe o código de barras aqui';
+};
+
+$('btLuz').onclick = async () => {
+  luz = !luz;
+  try { await pista.applyConstraints({ advanced: [{ torch: luz }] }); } catch { luz = false; }
+  $('btLuz').classList.toggle('ligado', luz);
+};
+
+$('btZoom').onclick = async () => {
+  zoomAtual = (zoomAtual + 1) % zooms.length;
+  try { await pista.applyConstraints({ advanced: [{ zoom: zooms[zoomAtual] }] }); } catch { zoomAtual = 0; }
+  $('btZoom').textContent = `Zoom ${String(zooms[zoomAtual]).replace('.', ',')}x`;
+  $('btZoom').classList.toggle('ligado', zoomAtual > 0);
+};
+
+// ---------- Digitar à mão ----------
+$('btManual').onclick = () => {
+  $('telaManual').hidden = false;
+  $('avisoManual').textContent = '';
+  $('campoManual').value = '';
+  $('campoManual').focus();
+};
+$('btFecharManual').onclick = () => { $('telaManual').hidden = true; };
+$('btMandar').onclick = () => {
+  const numeros = $('campoManual').value.replace(/\D/g, '');
+  if (numeros.length !== 44) {
+    $('avisoManual').textContent = `A chave tem 44 números. Aqui tem ${numeros.length}.`;
+    return;
+  }
+  if (!chaveValida(numeros)) {
+    $('avisoManual').textContent = 'Algum número está errado: a conta da chave não fecha. Confira e mande de novo.';
+    return;
+  }
+  $('telaManual').hidden = true;
+  mostrar('', 'Mandando para o PC...', numeros, '');
+  mandar(numeros, 'manual');
+};
+
+// Voltou para o navegador: religa a câmera, a tela acesa e a conexão
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!conectado()) conectarPC();
+  if (!$('telaInicio').hidden) return;
+  travarTelaAcesa();
+  if (!fluxo || !pista || pista.readyState === 'ended') {
+    try { await ligarCamera(); lerSempre(); } catch { /* toca em Começar de novo */ }
+  }
+});
+
+if (!/^lnotas-[a-z0-9]{6,40}$/.test(PC)) {
+  $('telaInicio').hidden = true;
+  $('telaSemPC').hidden = false;
+} else {
+  guardarFila();
+  ligarPeer();
+}
+</script>
+</body>
+</html>
