@@ -23,15 +23,33 @@
 
   #camera { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
 
-  /* Moldura no meio da tela, livre do aviso (em cima) e dos botões (embaixo) */
+  /* Moldura no meio da tela: números em cima, código de barras embaixo */
+  :root { --altura-moldura: clamp(120px, 30vh, 250px); }
   #moldura {
-    position: fixed; left: 6%; right: 6%; top: 50%; height: max(60px, 15vh); transform: translateY(-50%);
+    position: fixed; left: 5%; right: 5%; top: 50%; height: var(--altura-moldura); transform: translateY(-50%);
     border-radius: 10px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.38); border: 2px solid rgba(255, 255, 255, 0.85);
-    pointer-events: none;
+    pointer-events: none; overflow: hidden; transition: border-color 0.2s;
   }
-  #moldura::after { content: ""; position: absolute; left: 4%; right: 4%; top: 50%; border-top: 2px solid var(--verde); opacity: 0.85; }
-  #moldura.pausada::after { border-top-color: var(--suave); }
-  #dica { position: fixed; left: 0; right: 0; top: calc(50% + max(30px, 7.5vh) + 10px); text-align: center; color: rgba(255,255,255,0.92); font-size: 15px; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.6); padding: 0 16px; }
+  #moldura.achou { border-color: var(--verde); }
+  /* Linha do scanner varrendo a moldura enquanto lê */
+  #laser {
+    position: absolute; left: 2%; right: 2%; top: 4%; height: 2px; border-radius: 2px;
+    background: var(--verde); box-shadow: 0 0 10px 2px rgba(0, 212, 126, 0.75);
+    animation: varrer 1.4s ease-in-out infinite alternate;
+  }
+  @keyframes varrer { from { top: 4%; } to { top: 96%; } }
+  #moldura.pausada #laser { animation-play-state: paused; background: var(--suave); box-shadow: none; }
+  #dica, #lendo { position: fixed; left: 5%; right: 5%; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+  #dica { bottom: calc(50% + var(--altura-moldura) / 2 + 8px); color: rgba(255,255,255,0.92); font-size: 15px; }
+  /* O que o leitor está enxergando agora */
+  #lendo {
+    top: calc(50% + var(--altura-moldura) / 2 + 8px); left: 50%; right: auto; transform: translateX(-50%);
+    width: max-content; max-width: 92%; padding: 4px 10px; border-radius: 8px; background: rgba(10, 12, 11, 0.8); text-shadow: none;
+    font: 500 14px/1.4 ui-monospace, "Roboto Mono", Consolas, monospace; color: rgba(255,255,255,0.92); overflow-wrap: break-word;
+  }
+  #lendo:empty { display: none; }
+  #lendo.procurando { font: 400 14px/1.4 system-ui, sans-serif; color: var(--suave); }
+  #lendo.certo { color: var(--verde); }
 
   #topo {
     position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px;
@@ -98,8 +116,9 @@
 </head>
 <body>
 <video id="camera" playsinline muted autoplay></video>
-<div id="moldura"></div>
-<div id="dica">Encaixe o código de barras aqui</div>
+<div id="moldura"><div id="laser"></div></div>
+<div id="dica">Encaixe os números e o código de barras</div>
+<div id="lendo" class="procurando"></div>
 <div id="piscada"></div>
 
 <div id="topo">
@@ -125,7 +144,8 @@
 
 <div class="cobre" id="telaInicio">
   <h1>Leitor de Notas</h1>
-  <p>Aponte a câmera para o código de barras de cada nota, uma depois da outra. Cada chave lida vai direto para a lista no PC.</p>
+  <p>Aponte a câmera para os números e o código de barras de cada nota, uma depois da outra. Cada chave lida vai direto para a lista no PC.</p>
+  <p>Dica: com o celular deitado e a uns 15 cm da nota, ele lê mais rápido.</p>
   <button class="grande" id="btComecar">Começar a ler</button>
   <p id="erroCamera" style="color: var(--vermelho)"></p>
 </div>
@@ -147,7 +167,8 @@
 <script src="peerjs.min.js"></script>
 <script>
 const PC = decodeURIComponent(location.hash.slice(1));
-const FORMATOS = ['code_128', 'itf', 'ean_13', 'ean_8', 'code_39', 'qr_code'];
+// Só o código de barras da nota (CODE 128) e o QR da NFC-e
+const FORMATOS = ['code_128', 'qr_code'];
 const CHAVE_FILA = `leitorNotas.fila.${PC}`;
 const $ = (id) => document.getElementById(id);
 
@@ -159,23 +180,54 @@ function chaveValida(c) {
   const resto = soma % 11;
   return (resto < 2 ? 0 : 11 - resto) === Number(c[43]);
 }
-// { codigo, conferida } ou null. "conferida" = a própria chave prova que a leitura está certa.
+// Só passa chave de acesso de nota (44 números conferidos). Qualquer outro código é ignorado:
+// pedaço de barra confundido com código de produto não pode entrar na lista.
 function normalizar(valor, formato) {
   const bruto = String(valor || '').trim();
   if (!bruto) return null;
   if (formato === 'qr_code') {
     const achou = bruto.match(/\d{44}/);
-    if (achou && chaveValida(achou[0])) return { codigo: achou[0], conferida: true };
+    return achou && chaveValida(achou[0]) ? { codigo: achou[0] } : null;
   }
   const semEspaco = bruto.replace(/\s+/g, '');
-  if (/^\d{44}$/.test(semEspaco)) {
-    if (formato === 'itf') return { codigo: semEspaco, conferida: false };
-    return chaveValida(semEspaco) ? { codigo: semEspaco, conferida: true } : null;
-  }
-  if (/^[0-9A-Za-z.\-/ ]{1,80}$/.test(bruto)) return { codigo: bruto, conferida: false };
-  return null;
+  return chaveValida(semEspaco) ? { codigo: semEspaco } : null;
 }
 const emGrupos = (c) => /^\d{44}$/.test(c) ? c.replace(/(\d{4})(?=\d)/g, '$1 ') : c;
+
+// ---------- Números impressos: conferência rígida ----------
+// Ler números pela câmera pode errar um dígito. Por isso a chave só vale se tudo fechar:
+// dígito verificador, estado, mês, modelo (55 ou 65) e os dois dígitos do CNPJ de quem emitiu.
+const UFS = new Set(['11', '12', '13', '14', '15', '16', '17', '21', '22', '23', '24', '25', '26', '27', '28', '29', '31', '32', '33', '35', '41', '42', '43', '50', '51', '52', '53']);
+function cnpjValido(c) {
+  if (!/^\d{14}$/.test(c) || /^(\d)\1+$/.test(c)) return false;
+  const digito = (base) => {
+    let soma = 0, peso = base.length - 7;
+    for (const d of base) { soma += Number(d) * peso; peso = peso === 2 ? 9 : peso - 1; }
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+  const d1 = digito(c.slice(0, 12));
+  return d1 === Number(c[12]) && digito(c.slice(0, 12) + d1) === Number(c[13]);
+}
+function chaveCompleta(c) {
+  if (!chaveValida(c)) return false;
+  const mes = Number(c.slice(4, 6));
+  return UFS.has(c.slice(0, 2)) && mes >= 1 && mes <= 12 && ['55', '65'].includes(c.slice(20, 22)) && cnpjValido(c.slice(6, 20));
+}
+// Só vale a linha dos números: blocos inteiros que somam 44 dígitos, nunca pedaço de outra linha
+function chaveNaLinha(texto) {
+  for (const linha of texto.split('\n')) {
+    const blocos = linha.trim().split(/\s+/).map((b) => b.replace(/\D/g, '')).filter(Boolean);
+    for (let i = 0; i < blocos.length; i++) {
+      let junto = '';
+      for (let j = i; j < blocos.length && junto.length < 44; j++) {
+        junto += blocos[j];
+        if (junto.length === 44 && chaveCompleta(junto)) return junto;
+      }
+    }
+  }
+  return null;
+}
 
 // ---------- Som e vibração ----------
 // "leitura": bipe de leitor de loja, na hora em que a câmera pega o código.
@@ -346,7 +398,6 @@ function mandar(codigo, formato) {
 
 // ---------- Quando uma leitura vale ----------
 let ultimo = { codigo: null, aceitoEm: 0, vistoEm: 0 };
-let candidato = { codigo: null, em: 0 };
 
 function aoDetectar(valor, formato) {
   const r = normalizar(valor, formato);
@@ -358,17 +409,31 @@ function aoDetectar(valor, formato) {
     ultimo.vistoEm = agora;
     return;
   }
-  // Código sem conferência própria: precisa sair igual duas vezes seguidas
-  if (!r.conferida && (candidato.codigo !== r.codigo || agora - candidato.em > 1500)) {
-    candidato = { codigo: r.codigo, em: agora };
-    return;
-  }
   if (agora - ultimo.aceitoEm < 600) return;
   ultimo = { codigo: r.codigo, aceitoEm: agora, vistoEm: agora };
-  candidato = { codigo: null, em: 0 };
+  historico.push({ segundos: Math.round(agora) / 1000, leitor: formato === 'numeros' ? 'numeros' : (origemDaLeitura || formato), codigo: r.codigo });
   bip('leitura');
+  achouNaMoldura(r.codigo);
   mostrar('', 'Lida, mandando para o PC...', r.codigo, '', 4000);
   mandar(r.codigo, formato);
+}
+
+// Leituras aceitas nesta sessão (para conferir qual leitor pegou cada nota)
+const historico = [];
+window.leitorHistorico = historico;
+let origemDaLeitura = '';
+
+let tempoAchou = null;
+function achouNaMoldura(codigo) {
+  $('moldura').classList.add('achou');
+  $('lendo').className = 'certo';
+  $('lendo').textContent = `✓ ${emGrupos(codigo)}`;
+  clearTimeout(tempoAchou);
+  tempoAchou = setTimeout(() => {
+    $('moldura').classList.remove('achou');
+    $('lendo').className = 'procurando';
+    $('lendo').textContent = 'Procurando a chave...';
+  }, 1600);
 }
 
 // ---------- Câmera ----------
@@ -377,105 +442,12 @@ let fluxo = null;
 let pista = null;
 let lendo = false;
 let pausado = false;
-let detector = null;
-let zx = null;
 let luz = false;
 let zooms = [];
 let zoomAtual = 0;
 
 async function travarTelaAcesa() {
   try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch { /* sem trava */ }
-}
-
-async function prepararDetector() {
-  if (detector || zx) return;
-  if ('BarcodeDetector' in window) {
-    try {
-      const aceitos = await BarcodeDetector.getSupportedFormats();
-      if (aceitos.includes('code_128')) {
-        detector = new BarcodeDetector({ formats: FORMATOS.filter((f) => aceitos.includes(f)) });
-        return;
-      }
-    } catch { /* cai para o leitor reserva */ }
-  }
-  // Reserva: ZXing, para navegador sem leitor de código de barras embutido.
-  // Roda num trabalhador à parte, então a imagem da câmera nunca congela.
-  const enderecoZxing = new URL('zxing.min.js', location.href).href;
-  const codigo = `
-    try { importScripts(${JSON.stringify(enderecoZxing)}); } catch (e) { postMessage({ falhou: true }); throw e; }
-    const F = ZXing.BarcodeFormat;
-    const dicas = new Map();
-    dicas.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [F.CODE_128, F.ITF, F.EAN_13, F.EAN_8, F.CODE_39, F.QR_CODE]);
-    dicas.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    const leitor = new ZXing.MultiFormatReader();
-    leitor.setHints(dicas);
-    const nomes = {};
-    nomes[F.CODE_128] = 'code_128'; nomes[F.ITF] = 'itf'; nomes[F.EAN_13] = 'ean_13';
-    nomes[F.EAN_8] = 'ean_8'; nomes[F.CODE_39] = 'code_39'; nomes[F.QR_CODE] = 'qr_code';
-    let tela = null, ctx = null, vez = 0;
-    onmessage = (e) => {
-      const quadro = e.data;
-      if (!tela) { tela = new OffscreenCanvas(quadro.width, quadro.height); ctx = tela.getContext('2d', { willReadFrequently: true }); }
-      if (tela.width !== quadro.width || tela.height !== quadro.height) { tela.width = quadro.width; tela.height = quadro.height; }
-      ctx.drawImage(quadro, 0, 0);
-      quadro.close();
-      const px = ctx.getImageData(0, 0, tela.width, tela.height).data;
-      const total = tela.width * tela.height;
-      const cinza = new Uint8ClampedArray(total);
-      for (let i = 0, j = 0; i < total; i++, j += 4) cinza[i] = (px[j] * 77 + px[j + 1] * 150 + px[j + 2] * 29) >> 8;
-      const fonte = new ZXing.RGBLuminanceSource(cinza, tela.width, tela.height);
-      vez += 1;
-      const binario = vez % 2 ? new ZXing.HybridBinarizer(fonte) : new ZXing.GlobalHistogramBinarizer(fonte);
-      let achou = null;
-      try {
-        const r = leitor.decodeWithState(new ZXing.BinaryBitmap(binario));
-        achou = { texto: r.getText(), formato: nomes[r.getBarcodeFormat()] || 'outro' };
-      } catch (_) { /* nada nesse quadro */ } finally { leitor.reset(); }
-      postMessage({ achou });
-    };
-    postMessage({ pronto: true });
-  `;
-  const trabalhador = new Worker(URL.createObjectURL(new Blob([codigo], { type: 'text/javascript' })));
-  await new Promise((ok, falhou) => {
-    const desistir = setTimeout(() => falhou(new Error('leitor reserva não carregou')), 15000);
-    trabalhador.onmessage = (e) => {
-      clearTimeout(desistir);
-      if (e.data && e.data.pronto) ok(); else falhou(new Error('leitor reserva não carregou'));
-    };
-    trabalhador.onerror = () => { clearTimeout(desistir); falhou(new Error('leitor reserva não carregou')); };
-  });
-  let resposta = null;
-  trabalhador.onmessage = (e) => { const r = resposta; resposta = null; if (r) r(e.data && e.data.achou); };
-  trabalhador.onerror = () => { const r = resposta; resposta = null; if (r) r(null); };
-  zx = (quadro) => new Promise((ok) => {
-    resposta = ok;
-    setTimeout(() => { if (resposta === ok) { resposta = null; ok(null); } }, 2000);
-    trabalhador.postMessage(quadro, [quadro]);
-  });
-}
-
-// Só a faixa do meio da imagem (onde fica a moldura), no máximo 1600 px de largura
-function faixaDaMoldura() {
-  const w = video.videoWidth, h = video.videoHeight;
-  if (!w || !h) return null;
-  const alt = Math.round(h * 0.5);
-  const escala = Math.min(1, 1600 / w);
-  return { y: Math.round((h - alt) / 2), w, alt, largura: Math.round(w * escala), altura: Math.round(alt * escala) };
-}
-
-async function lerQuadro() {
-  const f = faixaDaMoldura();
-  if (!f) return;
-  const quadro = await createImageBitmap(video, 0, f.y, f.w, f.alt, { resizeWidth: f.largura, resizeHeight: f.altura, resizeQuality: 'high' });
-  if (detector) {
-    try {
-      const achados = await detector.detect(quadro);
-      for (const a of achados) aoDetectar(a.rawValue, a.format);
-    } finally { quadro.close(); }
-  } else {
-    const achou = await zx(quadro);
-    if (achou) aoDetectar(achou.texto, achou.formato);
-  }
 }
 
 async function ligarCamera() {
@@ -494,20 +466,194 @@ async function ligarCamera() {
   if (cap.zoom && cap.zoom.max > 1) {
     zooms = [1, 1.5, 2, 3].filter((z) => z >= cap.zoom.min && z <= cap.zoom.max);
     $('btZoom').hidden = zooms.length < 2;
+    // Começa em 2x: o celular fica mais longe da nota, foca melhor e as barras finas aparecem maiores
+    const dois = zooms.indexOf(2);
+    await aplicarZoom(dois >= 0 ? dois : zooms.length - 1);
   }
 }
 
-async function lerSempre() {
+async function aplicarZoom(indice) {
+  zoomAtual = indice;
+  try { await pista.applyConstraints({ advanced: [{ zoom: zooms[zoomAtual] }] }); } catch { /* sem zoom */ }
+  $('btZoom').textContent = `Zoom ${String(zooms[zoomAtual]).replace('.', ',')}x`;
+}
+
+// Pedaço da imagem da câmera que está dentro da moldura na tela.
+// "de" e "ate" medem em alturas da moldura a partir do topo dela (0 = topo, 1 = base).
+function recorteDaMoldura(de, ate, lados = 0.04) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
+  const tela = video.getBoundingClientRect();
+  const escala = Math.max(tela.width / vw, tela.height / vh);
+  const sobraX = (vw * escala - tela.width) / 2, sobraY = (vh * escala - tela.height) / 2;
+  const m = $('moldura').getBoundingClientRect();
+  const x = (m.left - tela.left + sobraX) / escala - (m.width / escala) * lados;
+  const w = (m.width / escala) * (1 + 2 * lados);
+  const y = (m.top - tela.top + sobraY + m.height * de) / escala;
+  const h = (m.height * (ate - de)) / escala;
+  const x0 = Math.max(0, Math.floor(x)), y0 = Math.max(0, Math.floor(y));
+  const x1 = Math.min(vw, Math.ceil(x + w)), y1 = Math.min(vh, Math.ceil(y + h));
+  return x1 - x0 > 20 && y1 - y0 > 10 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+}
+
+const esperar = (ms) => new Promise((ok) => setTimeout(ok, ms));
+const comLimite = (promessa, ms, seEstourar) => Promise.race([promessa, esperar(ms).then(() => seEstourar)]);
+const podeLer = () => lendo && !pausado && fluxo && video.readyState >= 2 && !document.hidden && $('telaManual').hidden;
+
+// ---------- Leitor 1: o leitor de código de barras do próprio celular (Android) ----------
+let nativo = null;
+async function prepararNativo() {
+  if (!('BarcodeDetector' in window)) return;
+  try {
+    const aceitos = await BarcodeDetector.getSupportedFormats();
+    if (aceitos.includes('code_128')) nativo = new BarcodeDetector({ formats: FORMATOS.filter((f) => aceitos.includes(f)) });
+  } catch { /* sem leitor nativo */ }
+}
+async function lacoNativo() {
+  while (lendo) {
+    const r = nativo && podeLer() ? recorteDaMoldura(-0.3, 1.3) : null;
+    if (r) {
+      try {
+        const quadro = await createImageBitmap(video, r.x, r.y, r.w, r.h);
+        try {
+          const achados = await comLimite(nativo.detect(quadro), 2500, []);
+          for (const a of achados) { origemDaLeitura = 'nativo'; aoDetectar(a.rawValue, a.format); }
+        } finally { quadro.close(); }
+      } catch { /* quadro ruim */ }
+    }
+    await esperar(60);
+  }
+}
+
+// ---------- Leitor 2: ZXing C++ com localização do código, num trabalhador à parte ----------
+// (detalhes em leitor-trabalhador.js)
+let trabalhador = null;
+function criarTrabalhador() {
+  const t = new Worker('leitor-trabalhador.js');
+  let espera = null;
+  t.onmessage = (e) => { const f = espera; espera = null; if (f) f(e.data); };
+  t.onerror = () => { const f = espera; espera = null; if (f) f({ achou: null }); };
+  return {
+    analisar: (dados) => new Promise((ok) => { espera = ok; t.postMessage(dados, [dados.quadro]); }),
+    encerrar: () => t.terminate(),
+  };
+}
+let ultimaFaixaEm = 0;
+async function lacoBarras() {
+  let vez = 0;
+  while (lendo) {
+    const r = trabalhador && podeLer() ? recorteDaMoldura(-0.3, 1.3) : null;
+    if (r) {
+      try {
+        const quadro = await createImageBitmap(video, r.x, r.y, r.w, r.h);
+        vez += 1;
+        const resposta = await comLimite(trabalhador.analisar({ quadro, vez, querFaixa: !!leitorNumeros && !lendoNumeros }), 4000, 'estourou');
+        if (resposta === 'estourou') {
+          trabalhador.encerrar();
+          trabalhador = criarTrabalhador();
+        } else if (resposta && resposta.achou) {
+          origemDaLeitura = 'zxing';
+          aoDetectar(resposta.achou.texto, resposta.achou.formato);
+        } else if (resposta && resposta.faixa) {
+          ultimaFaixaEm = performance.now();
+          lerNumeros(resposta.faixa);
+        }
+      } catch { /* quadro ruim */ }
+    }
+    await esperar(30);
+  }
+}
+
+// ---------- Leitor 3: os números impressos em cima do código de barras ----------
+// Normalmente lê a faixa que o trabalhador recortou e endireitou logo acima do código.
+// Se o código nem aparece, lê a parte de cima da moldura girando 3 graus para cada lado.
+// Precisa sair a mesma chave duas vezes para valer.
+let leitorNumeros = null;
+let lendoNumeros = false;
+const telaNumeros = document.createElement('canvas');
+const ctxNumeros = telaNumeros.getContext('2d', { willReadFrequently: true });
+const ANGULOS = [0, 3, -3];
+let leituraNumeros = { chave: null, vezes: 0, em: 0 };
+
+function carregarScript(endereco) {
+  return new Promise((ok, falhou) => {
+    const s = document.createElement('script');
+    s.src = endereco;
+    s.onload = ok;
+    s.onerror = falhou;
+    document.head.appendChild(s);
+  });
+}
+async function prepararNumeros() {
+  const base = new URL('ocr/', location.href).href;
+  await carregarScript(base + 'tesseract.min.js');
+  const leitor = await Tesseract.createWorker('eng', 1, { workerPath: base + 'worker.min.js', corePath: base, langPath: base.replace(/\/$/, ''), workerBlobURL: false });
+  await leitor.setParameters({ tessedit_char_whitelist: '0123456789', tessedit_pageseg_mode: '6' });
+  leitorNumeros = leitor;
+}
+function imagemDosNumeros(r, angulo) {
+  const escala = Math.min(1.5, 2400 / r.w);
+  const w = Math.round(r.w * escala), h = Math.round(r.h * escala);
+  telaNumeros.width = w;
+  telaNumeros.height = h;
+  ctxNumeros.fillStyle = '#fff';
+  ctxNumeros.fillRect(0, 0, w, h);
+  ctxNumeros.save();
+  ctxNumeros.translate(w / 2, h / 2);
+  ctxNumeros.rotate((angulo * Math.PI) / 180);
+  ctxNumeros.drawImage(video, r.x, r.y, r.w, r.h, -w / 2, -h / 2, w, h);
+  ctxNumeros.restore();
+  return telaNumeros;
+}
+// Mostra embaixo da moldura os números que o leitor está enxergando
+function mostrarLendo(texto) {
+  if ($('lendo').className === 'certo') return;
+  let melhor = '';
+  let blocosMelhor = 1;
+  for (const linha of texto.split('\n')) {
+    const blocos = linha.trim().split(/\s+/).filter((b) => /^\d{3,5}$/.test(b));
+    if (blocos.length > blocosMelhor) { blocosMelhor = blocos.length; melhor = blocos.join(' '); }
+  }
+  $('lendo').className = melhor ? '' : 'procurando';
+  $('lendo').textContent = melhor || 'Procurando a chave...';
+}
+function aoLerNumeros(texto) {
+  const chave = chaveNaLinha(texto);
+  if (!chave) { mostrarLendo(texto); return; }
+  const agora = performance.now();
+  if (leituraNumeros.chave === chave && agora - leituraNumeros.em < 5000) leituraNumeros.vezes += 1;
+  else leituraNumeros = { chave, vezes: 1, em: agora };
+  leituraNumeros.em = agora;
+  if (leituraNumeros.vezes >= 2) aoDetectar(chave, 'numeros');
+  else if ($('lendo').className !== 'certo') { $('lendo').className = ''; $('lendo').textContent = emGrupos(chave); }
+}
+async function lerNumeros(imagem) {
+  if (lendoNumeros || !leitorNumeros) return;
+  lendoNumeros = true;
+  try {
+    const resultado = await comLimite(leitorNumeros.recognize(imagem), 8000, null);
+    if (resultado && resultado.data) aoLerNumeros(resultado.data.text || '');
+  } catch { /* imagem ruim */ } finally {
+    lendoNumeros = false;
+  }
+}
+async function lacoNumerosReserva() {
+  let vez = 0;
+  while (lendo) {
+    if (leitorNumeros && !lendoNumeros && podeLer() && performance.now() - ultimaFaixaEm > 1500) {
+      const r = recorteDaMoldura(-0.2, 0.65);
+      if (r) await lerNumeros(imagemDosNumeros(r, ANGULOS[vez++ % ANGULOS.length]));
+    }
+    await esperar(200);
+  }
+}
+
+function lerSempre() {
   if (lendo) return;
   lendo = true;
-  while (lendo) {
-    const inicio = performance.now();
-    if (!pausado && fluxo && video.readyState >= 2) {
-      try { await lerQuadro(); } catch { /* quadro ruim */ }
-    }
-    // Uns 10 quadros por segundo: rápido para pegar a nota e leve para a câmera não engasgar
-    await new Promise((ok) => setTimeout(ok, Math.max(15, 100 - (performance.now() - inicio))));
-  }
+  lacoNativo();
+  lacoBarras();
+  lacoNumerosReserva();
 }
 
 $('btComecar').onclick = async () => {
@@ -519,14 +665,13 @@ $('btComecar').onclick = async () => {
     $('erroCamera').textContent = 'Não consegui abrir a câmera. Libere a câmera para este site nas permissões do navegador e toque de novo.';
     return;
   }
-  try {
-    await prepararDetector();
-  } catch {
-    $('erroCamera').textContent = 'Não consegui carregar o leitor. Confira a internet do celular e toque de novo.';
-    return;
-  }
+  await prepararNativo();
+  if (!trabalhador) trabalhador = criarTrabalhador();
+  if (!leitorNumeros) prepararNumeros().catch(() => { /* segue só com o código de barras */ });
   $('telaInicio').hidden = true;
   if (audio && audio.state === 'suspended') audio.resume(); // som liberado já no toque
+  $('lendo').className = 'procurando';
+  $('lendo').textContent = 'Procurando a chave...';
   mostrar('', 'Pronto para ler', '', 'Passe uma nota depois da outra.', 2500);
   travarTelaAcesa();
   lerSempre();
@@ -537,7 +682,7 @@ $('btPausar').onclick = () => {
   $('btPausar').textContent = pausado ? 'Continuar' : 'Pausar';
   $('btPausar').classList.toggle('ligado', pausado);
   $('moldura').classList.toggle('pausada', pausado);
-  $('dica').textContent = pausado ? 'Leitura pausada' : 'Encaixe o código de barras aqui';
+  $('dica').textContent = pausado ? 'Leitura pausada' : 'Encaixe os números e o código de barras';
 };
 
 $('btLuz').onclick = async () => {
@@ -546,12 +691,7 @@ $('btLuz').onclick = async () => {
   $('btLuz').classList.toggle('ligado', luz);
 };
 
-$('btZoom').onclick = async () => {
-  zoomAtual = (zoomAtual + 1) % zooms.length;
-  try { await pista.applyConstraints({ advanced: [{ zoom: zooms[zoomAtual] }] }); } catch { zoomAtual = 0; }
-  $('btZoom').textContent = `Zoom ${String(zooms[zoomAtual]).replace('.', ',')}x`;
-  $('btZoom').classList.toggle('ligado', zoomAtual > 0);
-};
+$('btZoom').onclick = () => aplicarZoom((zoomAtual + 1) % zooms.length);
 
 // ---------- Digitar à mão ----------
 $('btManual').onclick = () => {
