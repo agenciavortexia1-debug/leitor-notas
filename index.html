@@ -112,6 +112,16 @@
   }
   #campoManual:focus { border-color: var(--verde); }
   #avisoManual { color: var(--vermelho); font-size: 14px; min-height: 20px; }
+
+  /* Ajustes da câmera (só aparecem os que o celular aceita) */
+  #ajustes { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 560px; margin: 0 auto 8px; }
+  #ajustes button { background: rgba(16, 19, 18, 0.8); border-radius: 999px; padding: 7px 14px; font-size: 13px; }
+  #ajustes button[hidden] { display: none; }
+  #ajustes button.ligado { background: rgba(0, 212, 126, 0.2); color: var(--verde); }
+  /* Anel de "focando aqui" onde a pessoa tocou */
+  #anelFoco { position: fixed; width: 64px; height: 64px; margin: -32px 0 0 -32px; border: 2px solid var(--verde); border-radius: 50%; pointer-events: none; opacity: 0; }
+  #anelFoco.ver { animation: focar 0.9s ease-out; }
+  @keyframes focar { 0% { opacity: 1; transform: scale(1.5); } 55% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
 </style>
 </head>
 <body>
@@ -132,12 +142,17 @@
   <div id="detalhe"></div>
 </div>
 
+<div id="anelFoco"></div>
+
 <div id="painel">
   <div id="fila"></div>
-  <div id="botoes">
-    <button id="btPausar">Pausar</button>
+  <div id="ajustes">
     <button id="btLuz" hidden>Lanterna</button>
     <button id="btZoom" hidden>Zoom 1x</button>
+    <button id="btCamera" hidden>Trocar câmera</button>
+  </div>
+  <div id="botoes">
+    <button id="btPausar">Pausar</button>
     <button id="btManual">Digitar</button>
   </div>
 </div>
@@ -145,7 +160,7 @@
 <div class="cobre" id="telaInicio">
   <h1>Leitor de Notas</h1>
   <p>Aponte a câmera para os números e o código de barras de cada nota, uma depois da outra. Cada chave lida vai direto para a lista no PC.</p>
-  <p>Dica: com o celular deitado e a uns 15 cm da nota, ele lê mais rápido.</p>
+  <p>Dica: segure a uns 15 cm da nota. Se a imagem ficar borrada, toque na nota na tela para focar ou use Trocar câmera.</p>
   <button class="grande" id="btComecar">Começar a ler</button>
   <p id="erroCamera" style="color: var(--vermelho)"></p>
 </div>
@@ -164,9 +179,12 @@
   <button class="simples" id="btFecharManual">Voltar para a câmera</button>
 </div>
 
-<script src="peerjs.min.js"></script>
+<script src="supabase.js"></script>
 <script>
 const PC = decodeURIComponent(location.hash.slice(1));
+// Servidor do Leitor (Supabase): endereço e chave pública, preenchidos pelo montar.js
+const SUPABASE_URL = 'https://tgzfvvuggfxxwjyyvcmu.supabase.co';
+const SUPABASE_CHAVE = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRnemZ2dnVnZ2Z4eHdqeXl2Y211Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxMjk4MjYsImV4cCI6MjA5OTcwNTgyNn0.QgExPvuow5A-QK3BCKxMxCfdxAU0oQB5bW0aEYydrOU';
 // Só o código de barras da nota (CODE 128) e o QR da NFC-e
 const FORMATOS = ['code_128', 'qr_code'];
 const CHAVE_FILA = `leitorNotas.fila.${PC}`;
@@ -292,84 +310,81 @@ let fila = [];
 try { fila = JSON.parse(localStorage.getItem(CHAVE_FILA) || '[]'); } catch { fila = []; }
 function guardarFila() {
   try { localStorage.setItem(CHAVE_FILA, JSON.stringify(fila)); } catch { /* segue só na memória */ }
-  $('fila').style.display = fila.length && !conectado() ? 'block' : 'none';
+  $('fila').style.display = fila.length && !pcRespondendo() ? 'block' : 'none';
   $('fila').textContent = fila.length === 1
     ? '1 nota guardada, vai para o PC quando conectar'
     : `${fila.length} notas guardadas, vão para o PC quando conectar`;
 }
 
-// ---------- Conexão direta com o PC ----------
-let peer = null;
-let conn = null;
-let tentativa = null;
-const conectado = () => !!(conn && conn.open);
+// ---------- Conexão com o PC, pelo servidor do Leitor (Supabase) ----------
+// O celular não fala direto com o PC: essa conexão direta falha no 4G e em rede de empresa.
+// Os dois entram na mesma sala no servidor, que repassa cada mensagem na hora pela porta
+// dos sites (443), a que nenhuma rede bloqueia. Nada fica guardado lá.
+const EU = `cel-${Math.random().toString(36).slice(2, 10)}`;
+let canal = null;
+let naSala = false;
+let entrouEm = 0;
+let pcVistoEm = -Infinity;
+const pcRespondendo = () => performance.now() - pcVistoEm < 12000;
 
-function agendar(ms = 3000) {
-  clearTimeout(tentativa);
-  tentativa = setTimeout(conectarPC, ms);
+function enviar(msg) {
+  if (!canal || !naSala) return false;
+  canal.send({ type: 'broadcast', event: 'msg', payload: { ...msg, de: 'cel', cel: EU } }).catch(() => { /* o reenvio cobre */ });
+  return true;
 }
 
-function ligarPeer() {
-  peer = new Peer({ debug: 0 });
-  peer.on('open', conectarPC);
-  peer.on('disconnected', () => { if (!peer.destroyed) agendar(1500); });
-  peer.on('error', (erro) => {
-    if (erro.type === 'peer-unavailable') estadoPC('fora', 'O PC não está com a ferramenta aberta');
-    else if (!conectado()) estadoPC('fora', 'Sem internet, tentando de novo');
-    if (peer.destroyed) { peer = null; agendar(3000); } else agendar(3000);
-  });
+function atualizarEstado() {
+  if (pcRespondendo()) estadoPC('ok', 'PC conectado');
+  else if (!naSala) estadoPC('fora', 'Conectando...');
+  else if (performance.now() - entrouEm < 6000) estadoPC('', 'Procurando o PC...');
+  else estadoPC('fora', 'O PC não está com a ferramenta aberta');
+  guardarFila();
 }
 
-function conectarPC() {
-  clearTimeout(tentativa);
-  if (conectado()) return;
-  if (!peer || peer.destroyed) return ligarPeer();
-  if (peer.disconnected) { peer.reconnect(); return; }
-  if (!peer.open) return;
-  const c = peer.connect(PC, { reliable: true, serialization: 'json' });
-  conn = c;
-  c.on('open', () => {
-    if (conn !== c) return;
-    ultimoSinal = performance.now();
-    estadoPC('ok', 'PC conectado');
-    c.send({ t: 'oi' });
-    for (const item of fila) c.send({ t: 'chave', ...item });
-    guardarFila();
-  });
-  c.on('data', tratarResposta);
-  const caiu = () => {
-    if (conn !== c) return;
-    conn = null;
-    estadoPC('fora', 'PC desconectado, reconectando');
-    guardarFila();
-    agendar(2000);
-  };
-  c.on('close', caiu);
-  c.on('error', caiu);
-  // Não abriu em 10 s: tenta de novo
-  setTimeout(() => { if (conn === c && !c.open) { try { c.close(); } catch { /* já fechada */ } caiu(); } }, 10000);
-}
-
-// Sinal de vida: o celular manda "oi" a cada 3 s e o PC responde.
-// Sem resposta por 10 s, a ligação morreu (PC fechado, internet caiu): reconecta.
-let ultimoSinal = 0;
-setInterval(() => {
-  if (!conectado()) return;
-  if (performance.now() - ultimoSinal > 10000) {
-    const morta = conn;
-    conn = null;
-    try { morta.close(); } catch { /* já fechada */ }
-    estadoPC('fora', 'PC desconectado, reconectando');
-    guardarFila();
-    agendar(500);
-    return;
+// Reenvia o que o PC ainda não confirmou (cada item no máximo a cada 6 s; "tudo" ignora o prazo)
+function reenviarFila(tudo) {
+  const agora = Date.now();
+  let mexeu = false;
+  for (const item of fila) {
+    if (!tudo && item.enviadoEm && agora - item.enviadoEm < 6000) continue;
+    if (enviar({ t: 'chave', id: item.id, codigo: item.codigo, formato: item.formato })) { item.enviadoEm = agora; mexeu = true; }
   }
-  try { conn.send({ t: 'oi' }); } catch { /* o próximo sinal resolve */ }
-}, 3000);
+  if (mexeu) guardarFila();
+}
+
+function ligarServidor() {
+  if (!/^https:\/\//.test(SUPABASE_URL)) { estadoPC('fora', 'Servidor do Leitor não configurado'); return; }
+  const cliente = supabase.createClient(SUPABASE_URL, SUPABASE_CHAVE, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    realtime: { heartbeatIntervalMs: 15000 },
+  });
+  canal = cliente.channel(`leitor-${PC}`, { config: { broadcast: { self: false } } });
+  canal.on('broadcast', { event: 'msg' }, ({ payload }) => {
+    if (!payload || payload.de !== 'pc') return;
+    if (payload.para && payload.para !== EU) return;
+    const voltou = !pcRespondendo();
+    pcVistoEm = performance.now();
+    if (voltou) reenviarFila(true);
+    tratarResposta(payload);
+    atualizarEstado();
+  });
+  canal.subscribe((status) => {
+    const antes = naSala;
+    naSala = status === 'SUBSCRIBED';
+    if (naSala && !antes) { entrouEm = performance.now(); enviar({ t: 'oi' }); }
+    atualizarEstado();
+  });
+}
+
+// Sinal de vida a cada 5 s: o PC responde com o total da lista
+setInterval(() => {
+  if (naSala) enviar({ t: 'oi' });
+  if (naSala && fila.length && pcRespondendo()) reenviarFila(false);
+  atualizarEstado();
+}, 5000);
 
 function tratarResposta(d) {
   if (!d || typeof d !== 'object') return;
-  ultimoSinal = performance.now();
   if (typeof d.total === 'number') mostrarTotal(d.total);
   if (d.t !== 'r') return;
   const antes = fila.length;
@@ -391,9 +406,9 @@ function tratarResposta(d) {
 function mandar(codigo, formato) {
   const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`, codigo, formato };
   fila.push(item);
-  guardarFila();
-  if (conectado()) conn.send({ t: 'chave', ...item });
+  if (pcRespondendo() && enviar({ t: 'chave', ...item })) item.enviadoEm = Date.now();
   else mostrar('aviso', 'Lida e guardada no celular', codigo, 'Vai para o PC assim que conectar.');
+  guardarFila();
 }
 
 // ---------- Quando uma leitura vale ----------
@@ -438,6 +453,9 @@ function achouNaMoldura(codigo) {
 
 // ---------- Câmera ----------
 const video = $('camera');
+const CHAVE_CAMERA = 'leitorNotas.camera';
+const NO_IPHONE = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const DICA_PADRAO = 'Encaixe os números e o código de barras';
 let fluxo = null;
 let pista = null;
 let lendo = false;
@@ -445,37 +463,232 @@ let pausado = false;
 let luz = false;
 let zooms = [];
 let zoomAtual = 0;
+let camerasTraseiras = []; // [{ id, nome }]
+let cameraAtual = null;
 
 async function travarTelaAcesa() {
   try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch { /* sem trava */ }
 }
 
-async function ligarCamera() {
-  fluxo = await navigator.mediaDevices.getUserMedia({
+function pararCamera() {
+  if (fluxo) fluxo.getTracks().forEach((t) => t.stop());
+  fluxo = null;
+  pista = null;
+}
+
+// Se a câmera já está liberada e o celular não responde em 10 s, desiste (a tela não fica presa).
+// Antes de liberar não tem limite: a pessoa pode estar lendo o pedido de permissão.
+async function cameraJaLiberada() {
+  try { return (await navigator.permissions.query({ name: 'camera' })).state === 'granted'; } catch { return false; }
+}
+async function abrirCamera(id) {
+  const tamanho = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const pedido = navigator.mediaDevices.getUserMedia({
     audio: false,
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    video: id ? { deviceId: { exact: id }, ...tamanho } : { facingMode: { ideal: 'environment' }, ...tamanho },
   });
+  if (!(await cameraJaLiberada())) return pedido;
+  let desistiu = false;
+  let relogio = null;
+  const limite = new Promise((_, falhou) => {
+    relogio = setTimeout(() => { desistiu = true; falhou(new Error('a câmera não respondeu')); }, 10000);
+  });
+  // Respondeu: o relógio para. Só desliga a câmera se ela chegou depois da desistência.
+  pedido.then((f) => { clearTimeout(relogio); if (desistiu) f.getTracks().forEach((t) => t.stop()); }, () => clearTimeout(relogio));
+  return Promise.race([pedido, limite]);
+}
+
+// Lentes de trás do celular (os nomes só aparecem depois que a câmera foi liberada)
+async function listarCameras() {
+  try {
+    const todas = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    const frente = /front|frontal|user|selfie|facing front/i;
+    const tras = /back|rear|traseir|environment|facing back|trás|posterior/i;
+    let lista = todas.filter((d) => tras.test(d.label));
+    if (!lista.length) lista = todas.filter((d) => !frente.test(d.label));
+    // Lista vazia no meio do uso é tropeço do aparelho: fica a lista boa que já tinha
+    if (lista.length || !camerasTraseiras.length) camerasTraseiras = lista.map((d) => ({ id: d.deviceId, nome: d.label || 'Câmera de trás' }));
+  } catch { /* fica a lista que já tinha */ }
+  $('btCamera').hidden = camerasTraseiras.length < 2;
+}
+
+// Lente com foco automático (as ultra-angulares de alguns Androids têm foco fixo e nunca focam de perto).
+// Se o celular não diz, conta como "foca" (o iPhone não informa).
+function temFocoAutomatico(p) {
+  const cap = p && p.getCapabilities ? p.getCapabilities() : {};
+  return !cap.focusMode || cap.focusMode.includes('continuous') || cap.focusMode.includes('single-shot');
+}
+
+async function usarFluxo() {
   video.srcObject = fluxo;
-  await video.play();
+  await video.play().catch(() => { /* interrompido por outra troca: segue */ });
   pista = fluxo.getVideoTracks()[0];
+  cameraAtual = pista.getSettings ? pista.getSettings().deviceId : null;
+  const essa = pista;
+  // Outro app pegou a câmera: volta sozinho quando der
+  essa.addEventListener('ended', () => { if (pista === essa) { pista = null; setTimeout(religarSePrecisar, 600); } });
   const cap = pista.getCapabilities ? pista.getCapabilities() : {};
   try {
     if (cap.focusMode && cap.focusMode.includes('continuous')) await pista.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
   } catch { /* sem foco automático */ }
+  luz = false;
+  $('btLuz').classList.remove('ligado');
   $('btLuz').hidden = !cap.torch;
-  if (cap.zoom && cap.zoom.max > 1) {
-    zooms = [1, 1.5, 2, 3].filter((z) => z >= cap.zoom.min && z <= cap.zoom.max);
-    $('btZoom').hidden = zooms.length < 2;
-    // Começa em 2x: o celular fica mais longe da nota, foca melhor e as barras finas aparecem maiores
-    const dois = zooms.indexOf(2);
-    await aplicarZoom(dois >= 0 ? dois : zooms.length - 1);
+  // O zoom começa em 1x: é no 1x que o iPhone troca sozinho para a lente de perto (como no app da câmera)
+  zooms = cap.zoom && cap.zoom.max > 1 ? [1, 1.5, 2, 3].filter((z) => z >= cap.zoom.min && z <= cap.zoom.max) : [];
+  zoomAtual = 0;
+  $('btZoom').hidden = zooms.length < 2;
+  $('btZoom').textContent = 'Zoom 1x';
+  $('btZoom').classList.remove('ligado');
+}
+
+async function ligarCamera() {
+  pararCamera();
+  let salva = null;
+  try { salva = JSON.parse(localStorage.getItem(CHAVE_CAMERA) || 'null'); } catch { /* sem escolha salva */ }
+  try {
+    fluxo = await abrirCamera(salva && salva.id);
+  } catch {
+    fluxo = await abrirCamera(null); // a lente escolhida sumiu: volta para a padrão
   }
+  await listarCameras(); // logo ao abrir: os nomes das lentes já aparecem
+  await usarFluxo();
+  // Android: o navegador escolheu uma lente sem foco automático? Passa para a primeira de trás que foca.
+  if (!salva && !NO_IPHONE && !temFocoAutomatico(pista)) {
+    const primeira = cameraAtual;
+    for (const c of camerasTraseiras) {
+      if (c.id === primeira) continue;
+      try {
+        pararCamera();
+        fluxo = await abrirCamera(c.id);
+        await usarFluxo();
+        if (temFocoAutomatico(pista)) return;
+      } catch { /* essa lente não abriu */ }
+    }
+    if (!fluxo) { fluxo = await abrirCamera(null); await usarFluxo(); }
+  }
+}
+
+// A câmera às vezes recusa abrir uma lente logo depois de soltar a anterior:
+// tenta de novo e, se essa lente não abrir mesmo, passa para a seguinte.
+async function abrirComInsistencia(id) {
+  try {
+    return await abrirCamera(id);
+  } catch {
+    await esperar(400);
+    return abrirCamera(id);
+  }
+}
+async function trocarCamera() {
+  if (camerasTraseiras.length < 2) return;
+  const i = camerasTraseiras.findIndex((c) => c.id === cameraAtual);
+  pararCamera();
+  for (let passo = 1; passo < camerasTraseiras.length; passo++) {
+    const proxima = camerasTraseiras[(i + passo) % camerasTraseiras.length];
+    try {
+      fluxo = await abrirComInsistencia(proxima.id);
+      await usarFluxo();
+      try { localStorage.setItem(CHAVE_CAMERA, JSON.stringify({ id: proxima.id, nome: proxima.nome })); } catch { /* não lembra */ }
+      mostrar('', 'Câmera trocada', '', `${proxima.nome}. Se não focar, toque de novo em Trocar câmera.`, 3500);
+      return;
+    } catch { /* essa lente não abriu: tenta a próxima */ }
+  }
+  mostrar('erro', 'As outras câmeras não abriram', '', 'Voltei para a câmera de antes.', 3000);
+  try { fluxo = await abrirComInsistencia(cameraAtual); await usarFluxo(); } catch { /* religa quando der */ }
+}
+
+// Uma coisa por vez na câmera (ligar, trocar de lente, religar): dois pedidos juntos
+// atropelariam um ao outro
+let filaCamera = Promise.resolve();
+function naVezDaCamera(tarefa) {
+  const vez = filaCamera.then(tarefa, tarefa);
+  filaCamera = vez.catch(() => { /* o erro já foi tratado por quem pediu */ });
+  return vez;
+}
+
+function religarSePrecisar() {
+  return naVezDaCamera(async () => {
+    if (!lendo || document.hidden) return;
+    if (fluxo && pista && pista.readyState === 'live') return;
+    try {
+      await ligarCamera();
+    } catch {
+      mostrar('erro', 'A câmera não voltou', '', 'Toque em Trocar câmera ou recarregue a página.', 4000);
+    }
+  });
 }
 
 async function aplicarZoom(indice) {
   zoomAtual = indice;
   try { await pista.applyConstraints({ advanced: [{ zoom: zooms[zoomAtual] }] }); } catch { /* sem zoom */ }
   $('btZoom').textContent = `Zoom ${String(zooms[zoomAtual]).replace('.', ',')}x`;
+  $('btZoom').classList.toggle('ligado', zooms[zoomAtual] > 1);
+}
+
+// Ponto da tela -> ponto da imagem da câmera, de 0 a 1 (a imagem é cortada para cobrir a tela)
+function pontoNaImagem(cx, cy) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
+  const tela = video.getBoundingClientRect();
+  const escala = Math.max(tela.width / vw, tela.height / vh);
+  const sobraX = (vw * escala - tela.width) / 2, sobraY = (vh * escala - tela.height) / 2;
+  const x = (cx - tela.left + sobraX) / escala / vw, y = (cy - tela.top + sobraY) / escala / vh;
+  return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
+}
+
+// Foca num ponto. Só nos celulares que deixam (Android); no iPhone o foco é sempre automático.
+let voltaContinuo = null;
+async function focarEm(ponto) {
+  if (!pista || !ponto) return;
+  const cap = pista.getCapabilities ? pista.getCapabilities() : {};
+  if (!cap.focusMode) return;
+  try {
+    const pedido = { pointsOfInterest: [{ x: ponto.x, y: ponto.y }] };
+    if (cap.focusMode.includes('single-shot')) pedido.focusMode = 'single-shot';
+    await pista.applyConstraints({ advanced: [pedido] });
+    clearTimeout(voltaContinuo);
+    if (pedido.focusMode && cap.focusMode.includes('continuous')) {
+      const essa = pista;
+      voltaContinuo = setTimeout(() => { if (pista === essa) pista.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {}); }, 1800);
+    }
+  } catch { /* esse celular não aceita escolher o foco */ }
+}
+function mostrarAnel(cx, cy) {
+  const anel = $('anelFoco');
+  anel.style.left = `${cx}px`;
+  anel.style.top = `${cy}px`;
+  anel.className = '';
+  void anel.offsetWidth;
+  anel.className = 'ver';
+}
+video.addEventListener('pointerdown', (e) => {
+  if (!lendo || !fluxo) return;
+  mostrarAnel(e.clientX, e.clientY);
+  focarEm(pontoNaImagem(e.clientX, e.clientY));
+});
+
+// O leitor está vendo o código, mas não fecha a leitura (quase sempre é foco):
+// pede foco no meio da moldura e mostra uma dica, sem encher a tela.
+let semFecharDesde = 0;
+let dicaMostradaEm = -Infinity;
+let tempoDica = null;
+function dicaTemporaria(texto, ms) {
+  $('dica').textContent = texto;
+  clearTimeout(tempoDica);
+  tempoDica = setTimeout(() => { if (!pausado) $('dica').textContent = DICA_PADRAO; }, ms);
+}
+function vendoSemFechar(vendo) {
+  const agora = performance.now();
+  if (!vendo) { semFecharDesde = 0; return; }
+  if (!semFecharDesde) { semFecharDesde = agora; return; }
+  if (agora - semFecharDesde < 2500) return;
+  semFecharDesde = agora;
+  const m = $('moldura').getBoundingClientRect();
+  focarEm(pontoNaImagem(m.left + m.width / 2, m.top + m.height / 2));
+  if (agora - dicaMostradaEm > 12000) {
+    dicaMostradaEm = agora;
+    dicaTemporaria('Não fechou? Afaste um pouco ou toque na nota para focar', 5000);
+  }
 }
 
 // Pedaço da imagem da câmera que está dentro da moldura na tela.
@@ -498,7 +711,7 @@ function recorteDaMoldura(de, ate, lados = 0.04) {
 
 const esperar = (ms) => new Promise((ok) => setTimeout(ok, ms));
 const comLimite = (promessa, ms, seEstourar) => Promise.race([promessa, esperar(ms).then(() => seEstourar)]);
-const podeLer = () => lendo && !pausado && fluxo && video.readyState >= 2 && !document.hidden && $('telaManual').hidden;
+const podeLer = () => lendo && !pausado && fluxo && pista && video.readyState >= 2 && !document.hidden && $('telaManual').hidden;
 
 // ---------- Leitor 1: o leitor de código de barras do próprio celular (Android) ----------
 let nativo = null;
@@ -528,14 +741,25 @@ async function lacoNativo() {
 // ---------- Leitor 2: ZXing C++ com localização do código, num trabalhador à parte ----------
 // (detalhes em leitor-trabalhador.js)
 let trabalhador = null;
+// Cada pedido leva um número, e cada resposta volta para quem pediu
 function criarTrabalhador() {
   const t = new Worker('leitor-trabalhador.js');
-  let espera = null;
-  t.onmessage = (e) => { const f = espera; espera = null; if (f) f(e.data); };
-  t.onerror = () => { const f = espera; espera = null; if (f) f({ achou: null }); };
+  const esperando = new Map();
+  let proximo = 1;
+  const soltarTodos = () => { for (const f of esperando.values()) f({ achou: null }); esperando.clear(); };
+  t.onmessage = (e) => {
+    const d = e.data || {};
+    const f = esperando.get(d.pedido);
+    if (f) { esperando.delete(d.pedido); f(d); }
+  };
+  t.onerror = soltarTodos;
   return {
-    analisar: (dados) => new Promise((ok) => { espera = ok; t.postMessage(dados, [dados.quadro]); }),
-    encerrar: () => t.terminate(),
+    analisar: (dados) => new Promise((ok) => {
+      const pedido = proximo++;
+      esperando.set(pedido, ok);
+      t.postMessage({ ...dados, pedido }, [dados.quadro]);
+    }),
+    encerrar: () => { t.terminate(); soltarTodos(); },
   };
 }
 let ultimaFaixaEm = 0;
@@ -548,6 +772,7 @@ async function lacoBarras() {
         const quadro = await createImageBitmap(video, r.x, r.y, r.w, r.h);
         vez += 1;
         const resposta = await comLimite(trabalhador.analisar({ quadro, vez, querFaixa: !!leitorNumeros && !lendoNumeros }), 4000, 'estourou');
+        if (resposta && resposta !== 'estourou') vendoSemFechar(resposta.achouCodigo && !resposta.achou);
         if (resposta === 'estourou') {
           trabalhador.encerrar();
           trabalhador = criarTrabalhador();
@@ -660,7 +885,7 @@ $('btComecar').onclick = async () => {
   $('erroCamera').textContent = '';
   try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch { /* sem som */ }
   try {
-    await ligarCamera();
+    await naVezDaCamera(ligarCamera);
   } catch {
     $('erroCamera').textContent = 'Não consegui abrir a câmera. Libere a câmera para este site nas permissões do navegador e toque de novo.';
     return;
@@ -682,7 +907,7 @@ $('btPausar').onclick = () => {
   $('btPausar').textContent = pausado ? 'Continuar' : 'Pausar';
   $('btPausar').classList.toggle('ligado', pausado);
   $('moldura').classList.toggle('pausada', pausado);
-  $('dica').textContent = pausado ? 'Leitura pausada' : 'Encaixe os números e o código de barras';
+  $('dica').textContent = pausado ? 'Leitura pausada' : DICA_PADRAO;
 };
 
 $('btLuz').onclick = async () => {
@@ -692,6 +917,7 @@ $('btLuz').onclick = async () => {
 };
 
 $('btZoom').onclick = () => aplicarZoom((zoomAtual + 1) % zooms.length);
+$('btCamera').onclick = () => naVezDaCamera(trocarCamera);
 
 // ---------- Digitar à mão ----------
 $('btManual').onclick = () => {
@@ -716,15 +942,13 @@ $('btMandar').onclick = () => {
   mandar(numeros, 'manual');
 };
 
-// Voltou para o navegador: religa a câmera, a tela acesa e a conexão
-document.addEventListener('visibilitychange', async () => {
+// Voltou para o navegador: religa a câmera e a tela acesa (a conexão com o servidor volta sozinha)
+document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
-  if (!conectado()) conectarPC();
+  atualizarEstado();
   if (!$('telaInicio').hidden) return;
   travarTelaAcesa();
-  if (!fluxo || !pista || pista.readyState === 'ended') {
-    try { await ligarCamera(); lerSempre(); } catch { /* toca em Começar de novo */ }
-  }
+  setTimeout(religarSePrecisar, 300);
 });
 
 if (!/^lnotas-[a-z0-9]{6,40}$/.test(PC)) {
@@ -732,7 +956,7 @@ if (!/^lnotas-[a-z0-9]{6,40}$/.test(PC)) {
   $('telaSemPC').hidden = false;
 } else {
   guardarFila();
-  ligarPeer();
+  ligarServidor();
 }
 </script>
 </body>

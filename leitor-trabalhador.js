@@ -164,7 +164,7 @@ async function ler(imagem, formatos) {
 }
 
 onmessage = async (e) => {
-  const { quadro, vez, querFaixa } = e.data;
+  const { quadro, vez, querFaixa, pedido } = e.data;
   try {
     tela.width = quadro.width;
     tela.height = quadro.height;
@@ -194,8 +194,8 @@ onmessage = async (e) => {
       ctxFaixa.putImageData(f, 0, 0);
       faixa = await telaFaixa.convertToBlob({ type: 'image/png' });
     }
-    postMessage({ achou, faixa, achouCodigo: !!c });
+    postMessage({ pedido, achou, faixa, achouCodigo: !!c });
   } catch (erro) {
-    postMessage({ achou: null, faixa: null, erro: String(erro) });
+    postMessage({ pedido, achou: null, faixa: null, erro: String(erro) });
   }
 };
